@@ -23,17 +23,20 @@ interface LegoProduct {
 async function scrollToLoadAllProducts(page: Page, maxProducts: number): Promise<void> {
     let previousProductCount = 0;
     let sameCountIterations = 0;
-    const maxSameCountIterations = 10;
+    const maxSameCountIterations = 15;  // More tolerance
     let totalScrolls = 0;
-    const maxTotalScrolls = 500;
+    const maxTotalScrolls = 200;
+
+    log.info('Starting to load all products...');
 
     while (sameCountIterations < maxSameCountIterations && totalScrolls < maxTotalScrolls) {
         totalScrolls++;
 
         const currentProductCount = await page.locator('[data-test="product-item"]').count().catch(() => 0);
 
-        if (totalScrolls % 10 === 0 || currentProductCount - previousProductCount > 20) {
-            log.info(`Products loaded: ${currentProductCount} [scroll ${totalScrolls}]`);
+        // Log every 5 scrolls or when count changes
+        if (totalScrolls % 5 === 0 || currentProductCount !== previousProductCount) {
+            log.info(`Products: ${currentProductCount} [scroll ${totalScrolls}]`);
         }
 
         if (maxProducts > 0 && currentProductCount >= maxProducts) {
@@ -41,41 +44,82 @@ async function scrollToLoadAllProducts(page: Page, maxProducts: number): Promise
             break;
         }
 
+        // Scroll to bottom
         await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await page.waitForTimeout(1500);
+        await page.waitForTimeout(2000);
 
-        // Try to click "Load More" buttons
+        // Try multiple approaches to load more products
+        let loadedMore = false;
+
+        // Approach 1: Look for "Load More" or "Show More" buttons with various selectors
         const loadMoreSelectors = [
+            'button[data-test="product-listing-load-more"]',
             'button[data-test="load-more"]',
+            '[data-test="listing-summary"] button',
             'button:has-text("Load more")',
             'button:has-text("Show more")',
             'button:has-text("View more")',
+            'button:has-text("See more")',
+            'a:has-text("Load more")',
+            'a:has-text("Show more")',
+            '[class*="LoadMore"] button',
+            '[class*="loadMore"] button',
+            '[class*="Pagination"] button:has-text("Next")',
+            '[class*="pagination"] a:has-text("Next")',
         ];
 
-        let clickedButton = false;
         for (const selector of loadMoreSelectors) {
-            const button = page.locator(selector).first();
-            if (await button.isVisible().catch(() => false)) {
-                log.info(`Clicking: ${selector}`);
-                await button.click().catch(() => {});
-                await page.waitForTimeout(3000);
-                clickedButton = true;
-                break;
+            try {
+                const button = page.locator(selector).first();
+                const isVisible = await button.isVisible().catch(() => false);
+                if (isVisible) {
+                    const isDisabled = await button.isDisabled().catch(() => false);
+                    if (!isDisabled) {
+                        log.info(`Found and clicking: ${selector}`);
+                        await button.click();
+                        await page.waitForTimeout(3000);
+                        loadedMore = true;
+                        break;
+                    }
+                }
+            } catch {
+                // Continue to next selector
             }
         }
 
-        if (clickedButton) {
-            sameCountIterations = 0;
-        } else if (currentProductCount === previousProductCount) {
+        // Approach 2: Check for infinite scroll trigger elements
+        if (!loadedMore) {
+            // Scroll up a bit and back down to trigger lazy loading
+            await page.evaluate(() => {
+                window.scrollTo(0, document.body.scrollHeight - 500);
+            });
+            await page.waitForTimeout(500);
+            await page.evaluate(() => {
+                window.scrollTo(0, document.body.scrollHeight);
+            });
+            await page.waitForTimeout(1500);
+        }
+
+        // Check if count changed
+        const newCount = await page.locator('[data-test="product-item"]').count().catch(() => 0);
+
+        if (newCount === previousProductCount && !loadedMore) {
             sameCountIterations++;
         } else {
             sameCountIterations = 0;
         }
 
-        previousProductCount = currentProductCount;
+        previousProductCount = newCount;
     }
 
-    log.info(`Finished loading. Total scrolls: ${totalScrolls}, Products: ${previousProductCount}`);
+    log.info(`Finished loading. Total scrolls: ${totalScrolls}, Final product count: ${previousProductCount}`);
+
+    // If we got very few products, save a debug screenshot
+    if (previousProductCount < 50) {
+        log.warning(`Only ${previousProductCount} products found - saving debug screenshot`);
+        const screenshot = await page.screenshot({ fullPage: true });
+        await Actor.setValue('catalog-debug-screenshot', screenshot, { contentType: 'image/png' });
+    }
 }
 
 // CATALOG handler - collects all product URLs and enqueues them
