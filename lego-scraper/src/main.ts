@@ -37,8 +37,8 @@ const crawler = new PlaywrightCrawler({
 
     // Timeout settings
     maxRequestRetries: 2,            // Fewer retries = faster failures
-    requestHandlerTimeoutSecs: 60,   // Reduced from 180
-    navigationTimeoutSecs: 30,       // Reduced from 60
+    requestHandlerTimeoutSecs: 600,  // 10 minutes for catalog page to load all products
+    navigationTimeoutSecs: 60,       // 1 minute for page navigation
 
     // Use a more realistic browser setup to avoid detection
     launchContext: {
