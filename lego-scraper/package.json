@@ -1,0 +1,33 @@
+{
+  "name": "lego-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Apify actor to scrape LEGO product catalog from lego.com",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "main": "dist/main.js",
+  "scripts": {
+    "start": "npm run build && node dist/main.js",
+    "start:prod": "node dist/main.js",
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "apify",
+    "lego",
+    "scraper",
+    "playwright"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "apify": "^3.2.6",
+    "crawlee": "^3.12.2",
+    "playwright": "^1.49.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

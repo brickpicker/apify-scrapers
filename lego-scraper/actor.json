@@ -1,0 +1,65 @@
+{
+  "actorSpecification": 1,
+  "name": "lego-scraper",
+  "title": "LEGO Product Scraper",
+  "description": "Scrapes all LEGO products from lego.com catalog including images, prices, reviews, availability, and more.",
+  "version": "1.0.0",
+  "buildTag": "latest",
+  "meta": {
+    "templateId": "ts-crawlee-playwright-chrome"
+  },
+  "input": "./input_schema.json",
+  "dockerfile": "./Dockerfile",
+  "storages": {
+    "dataset": {
+      "actorSpecification": 1,
+      "title": "LEGO Products",
+      "views": {
+        "products": {
+          "title": "LEGO Products",
+          "transformation": {
+            "fields": [
+              "setNumber",
+              "name",
+              "theme",
+              "pieces",
+              "minifigures",
+              "rating",
+              "reviewCount",
+              "price",
+              "availability",
+              "tags",
+              "imageUrl",
+              "productUrl"
+            ]
+          },
+          "display": {
+            "component": "table",
+            "properties": {
+              "setNumber": {
+                "label": "Set #",
+                "format": "text"
+              },
+              "name": {
+                "label": "Name",
+                "format": "text"
+              },
+              "theme": {
+                "label": "Theme",
+                "format": "text"
+              },
+              "price": {
+                "label": "Price",
+                "format": "text"
+              },
+              "availability": {
+                "label": "Availability",
+                "format": "text"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
