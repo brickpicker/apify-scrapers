@@ -8,11 +8,6 @@ interface LegoProduct {
     setNumber: string;
     name: string;
     theme: string;
-    pieces: number | null;
-    minifigures: number | null;
-    ageRange: string | null;
-    rating: number | null;
-    reviewCount: number | null;
     retailPrice: string | null;
     salePrice: string | null;
     isOnSale: boolean;
@@ -227,41 +222,12 @@ router.addHandler('PRODUCT', async ({ page, request, log }) => {
         isOnSale = discountPercentage > 0;
     }
 
-    // If on sale, add Sale tag
-    if (isOnSale) {
-        // Will add to tags later
-    }
-
-    // Extract pieces count
-    const piecesText = await page.locator('[data-test="product-piece-count"], [class*="Pieces"], span:has-text("Pieces")').first().textContent().catch(() => '') || '';
-    const piecesMatch = piecesText.match(/(\d+)/);
-    const pieces = piecesMatch ? parseInt(piecesMatch[1], 10) : null;
-
-    // Extract minifigures count
-    const minifigsText = await page.locator('[data-test="product-minifig-count"], [class*="Minifig"], span:has-text("Minifigure")').first().textContent().catch(() => '') || '';
-    const minifigsMatch = minifigsText.match(/(\d+)/);
-    const minifigures = minifigsMatch ? parseInt(minifigsMatch[1], 10) : null;
-
-    // Extract age range
-    const ageText = await page.locator('[data-test="product-age"], [class*="Age"], span:has-text("Ages")').first().textContent().catch(() => '') || '';
-    const ageRange = ageText.trim() || null;
-
-    // Extract rating
-    const ratingElement = page.locator('[data-test="product-overview-rating"], [class*="Rating"]').first();
-    const ratingLabel = await ratingElement.getAttribute('aria-label').catch(() => '') || '';
-    const ratingText = await ratingElement.textContent().catch(() => '') || '';
-    const ratingMatch = ratingLabel.match(/([\d.]+)\s*(?:out of|\/)\s*5/) || ratingText.match(/([\d.]+)/);
-    const rating = ratingMatch ? parseFloat(ratingMatch[1]) : null;
-
-    // Extract review count
-    const reviewText = await page.locator('[data-test="product-review-count"], [class*="ReviewCount"], a:has-text("review")').first().textContent().catch(() => '') || '';
-    const reviewMatch = reviewText.match(/(\d+)/);
-    const reviewCount = reviewMatch ? parseInt(reviewMatch[1], 10) : null;
+    // Get page content for tag/availability detection
+    const pageHtml = await page.content();
+    const pageContentLower = pageHtml.toLowerCase();
 
     // Extract availability/stock status
     let availability = 'Available';
-    const pageContent = await page.content();
-    const pageContentLower = pageContent.toLowerCase();
 
     // Check for various stock statuses
     const addToBagButton = page.locator('button[data-test="add-to-bag"], button:has-text("Add to Bag"), button:has-text("Add to Cart")').first();
@@ -374,11 +340,6 @@ router.addHandler('PRODUCT', async ({ page, request, log }) => {
         setNumber,
         name: name.trim(),
         theme: theme.trim(),
-        pieces,
-        minifigures,
-        ageRange,
-        rating,
-        reviewCount,
         retailPrice,
         salePrice,
         isOnSale,
