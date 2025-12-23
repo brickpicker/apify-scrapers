@@ -14,7 +14,7 @@ interface Input {
 await Actor.init();
 
 const input = await Actor.getInput<Input>() ?? {
-    startUrl: 'https://www.lego.com/en-us/categories/all-sets',
+    startUrl: 'https://www.lego.com/en-us/categories/all-sets?filters.i0.key=categories.id&filters.i0.values.i0=12ba8640-7fb5-4281-991d-ac55c65d8001',
     maxProducts: 0,
 };
 

@@ -1,6 +1,6 @@
 import { Actor } from 'apify';
 import { createPlaywrightRouter, Dataset, log } from 'crawlee';
-import type { Page, Response } from 'playwright';
+import type { Page } from 'playwright';
 
 export const router = createPlaywrightRouter();
 
@@ -10,10 +10,13 @@ interface LegoProduct {
     theme: string;
     pieces: number | null;
     minifigures: number | null;
+    ageRange: string | null;
     rating: number | null;
     reviewCount: number | null;
-    price: string | null;
-    originalPrice: string | null;
+    retailPrice: string | null;
+    salePrice: string | null;
+    isOnSale: boolean;
+    discountPercentage: number | null;
     availability: string;
     tags: string[];
     imageUrl: string;
@@ -21,272 +24,54 @@ interface LegoProduct {
     scrapedAt: string;
 }
 
-interface ApiProduct {
-    id?: string;
-    productCode?: string;
-    name?: string;
-    slug?: string;
-    baseImgUrl?: string;
-    primaryImage?: string | { url?: string };
-    image?: { url?: string };
-    overrideUrl?: string;
-    price?: {
-        formattedAmount?: string;
-        formattedValue?: string;
-        centAmount?: number;
-        currencyCode?: string;
-    };
-    listPrice?: {
-        formattedAmount?: string;
-        formattedValue?: string;
-    };
-    variant?: {
-        id?: string;
-        attributes?: {
-            pieceCount?: number;
-            minifigureCount?: number;
-            rating?: { averageRating?: number; totalReviewCount?: number };
-            featuredFlags?: string[];
-            deliveryChannel?: string;
-            canAddToBag?: boolean;
-        };
-    };
-    attributes?: {
-        pieceCount?: number;
-        minifigureCount?: number;
-        rating?: { averageRating?: number; totalReviewCount?: number };
-        featuredFlags?: string[];
-    };
-    availability?: {
-        canAddToBag?: boolean;
-        deliveryChannel?: string;
-        launchDate?: string;
-    };
-    themes?: Array<{ name?: string }>;
-    badges?: Array<{ text?: string; type?: string }>;
-    flags?: Array<{ text?: string; type?: string }>;
-    [key: string]: unknown;
-}
-
-// Store captured products from API responses
-const capturedProducts: Map<string, ApiProduct> = new Map();
-
-// Parse API product data into our format
-function parseApiProduct(apiProduct: ApiProduct, baseUrl: string): LegoProduct | null {
-    try {
-        const setNumber = apiProduct.productCode || apiProduct.id || '';
-        if (!setNumber) return null;
-
-        const name = apiProduct.name || '';
-
-        // Get image URL
-        let imageUrl = '';
-        if (typeof apiProduct.primaryImage === 'string') {
-            imageUrl = apiProduct.primaryImage;
-        } else if (apiProduct.primaryImage?.url) {
-            imageUrl = apiProduct.primaryImage.url;
-        } else if (apiProduct.baseImgUrl) {
-            imageUrl = apiProduct.baseImgUrl;
-        } else if (apiProduct.image?.url) {
-            imageUrl = apiProduct.image.url;
-        }
-
-        // Get price info
-        const priceData = apiProduct.price;
-        const price = priceData?.formattedAmount || priceData?.formattedValue ||
-            (priceData?.centAmount ? `$${(priceData.centAmount / 100).toFixed(2)}` : null);
-
-        const listPriceData = apiProduct.listPrice;
-        const originalPrice = listPriceData?.formattedAmount || listPriceData?.formattedValue || null;
-
-        // Get attributes (could be nested in variant or directly on product)
-        const attrs = apiProduct.variant?.attributes || apiProduct.attributes || {};
-
-        const pieces = attrs.pieceCount ?? null;
-        const minifigures = attrs.minifigureCount ?? null;
-        const rating = attrs.rating?.averageRating ?? null;
-        const reviewCount = attrs.rating?.totalReviewCount ?? null;
-
-        // Get availability
-        let availability = 'Available';
-        const avail = apiProduct.availability;
-        const variantAttrs = apiProduct.variant?.attributes;
-        if (avail) {
-            if (avail.canAddToBag === false) {
-                availability = 'Out of Stock';
-            }
-            if (avail.deliveryChannel === 'coming_soon' || avail.launchDate) {
-                availability = 'Coming Soon';
-            }
-        } else if (variantAttrs) {
-            if (variantAttrs.canAddToBag === false) {
-                availability = 'Out of Stock';
-            }
-            if (variantAttrs.deliveryChannel === 'coming_soon') {
-                availability = 'Coming Soon';
-            }
-        }
-
-        // Get tags/badges/flags
-        const tags: string[] = [];
-        const featuredFlags = attrs.featuredFlags || [];
-        tags.push(...featuredFlags);
-
-        if (apiProduct.badges) {
-            for (const badge of apiProduct.badges) {
-                if (badge.text) tags.push(badge.text);
-            }
-        }
-        if (apiProduct.flags) {
-            for (const flag of apiProduct.flags) {
-                if (flag.text) tags.push(flag.text);
-            }
-        }
-
-        // Get theme
-        let theme = '';
-        if (apiProduct.themes && apiProduct.themes.length > 0) {
-            theme = apiProduct.themes[0].name || '';
-        }
-
-        // Build product URL
-        const slug = apiProduct.slug || apiProduct.overrideUrl || setNumber;
-        const productUrl = slug.startsWith('http') ? slug : `${baseUrl}/product/${slug}`;
-
-        return {
-            setNumber,
-            name,
-            theme,
-            pieces,
-            minifigures,
-            rating,
-            reviewCount,
-            price,
-            originalPrice,
-            availability,
-            tags: [...new Set(tags)], // Remove duplicates
-            imageUrl,
-            productUrl,
-            scrapedAt: new Date().toISOString(),
-        };
-    } catch (error) {
-        log.warning(`Failed to parse API product: ${error}`);
-        return null;
-    }
-}
-
-// Process API response data
-function processApiResponse(data: unknown): ApiProduct[] {
-    const products: ApiProduct[] = [];
-
-    function findProducts(obj: unknown, depth = 0): void {
-        if (depth > 10 || !obj) return;
-
-        if (Array.isArray(obj)) {
-            for (const item of obj) {
-                findProducts(item, depth + 1);
-            }
-        } else if (typeof obj === 'object' && obj !== null) {
-            const record = obj as Record<string, unknown>;
-            // Check if this looks like a product
-            if (record.productCode || (record.id && record.name && (record.price || record.primaryImage))) {
-                products.push(record as ApiProduct);
-            } else {
-                // Recurse into object properties
-                for (const value of Object.values(record)) {
-                    findProducts(value, depth + 1);
-                }
-            }
-        }
-    }
-
-    findProducts(data);
-    return products;
-}
-
-// Set up API interception
-async function setupApiInterception(page: Page): Promise<void> {
-    page.on('response', async (response: Response) => {
-        const url = response.url();
-
-        // Look for product-related API endpoints
-        if (
-            url.includes('/api/') ||
-            url.includes('/graphql') ||
-            url.includes('product') ||
-            url.includes('catalog') ||
-            url.includes('search')
-        ) {
-            try {
-                const contentType = response.headers()['content-type'] || '';
-                if (contentType.includes('application/json')) {
-                    const text = await response.text();
-                    const data = JSON.parse(text);
-
-                    const products = processApiResponse(data);
-                    for (const product of products) {
-                        const key = product.productCode || product.id || '';
-                        if (key && !capturedProducts.has(key)) {
-                            capturedProducts.set(key, product);
-                            log.debug(`Captured product from API: ${key}`);
-                        }
-                    }
-
-                    if (products.length > 0) {
-                        log.info(`Captured ${products.length} products from API response`);
-                    }
-                }
-            } catch {
-                // Ignore parsing errors for non-JSON responses
-            }
-        }
-    });
-}
-
-// Helper function to scroll and load all products
-async function scrollToLoadAllProducts(page: Page, maxProducts: number): Promise<number> {
+// Helper function to scroll and load all products in catalog
+async function scrollToLoadAllProducts(page: Page, maxProducts: number): Promise<void> {
     let previousProductCount = 0;
     let sameCountIterations = 0;
-    const maxSameCountIterations = 5;
+    const maxSameCountIterations = 10;
+    let totalScrolls = 0;
+    const maxTotalScrolls = 500;
 
-    while (sameCountIterations < maxSameCountIterations) {
-        // Get current product count from either API captures or DOM
-        const domProductCount = await page.locator('[data-test="product-item"], [data-test="product-leaf"], article[data-test*="product"], li[data-test*="product"]').count().catch(() => 0);
-        const apiProductCount = capturedProducts.size;
-        const currentProductCount = Math.max(domProductCount, apiProductCount);
+    while (sameCountIterations < maxSameCountIterations && totalScrolls < maxTotalScrolls) {
+        totalScrolls++;
 
-        log.info(`Products loaded: ${currentProductCount} (DOM: ${domProductCount}, API: ${apiProductCount})`);
+        const currentProductCount = await page.locator('[data-test="product-item"]').count().catch(() => 0);
 
-        // Check if we've reached max products limit
+        if (totalScrolls % 10 === 0 || currentProductCount - previousProductCount > 20) {
+            log.info(`Products loaded: ${currentProductCount} [scroll ${totalScrolls}]`);
+        }
+
         if (maxProducts > 0 && currentProductCount >= maxProducts) {
             log.info(`Reached max products limit: ${maxProducts}`);
             break;
         }
 
-        // Scroll down
         await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(1500);
 
-        // Try to click "Load More" or pagination buttons
+        // Try to click "Load More" buttons
         const loadMoreSelectors = [
             'button[data-test="load-more"]',
             'button:has-text("Load more")',
             'button:has-text("Show more")',
-            '[data-test="pagination-next"]',
-            'button:has-text("Next")',
+            'button:has-text("View more")',
         ];
 
+        let clickedButton = false;
         for (const selector of loadMoreSelectors) {
             const button = page.locator(selector).first();
             if (await button.isVisible().catch(() => false)) {
+                log.info(`Clicking: ${selector}`);
                 await button.click().catch(() => {});
                 await page.waitForTimeout(3000);
+                clickedButton = true;
                 break;
             }
         }
 
-        // Check if product count changed
-        if (currentProductCount === previousProductCount) {
+        if (clickedButton) {
+            sameCountIterations = 0;
+        } else if (currentProductCount === previousProductCount) {
             sameCountIterations++;
         } else {
             sameCountIterations = 0;
@@ -295,176 +80,322 @@ async function scrollToLoadAllProducts(page: Page, maxProducts: number): Promise
         previousProductCount = currentProductCount;
     }
 
-    return capturedProducts.size;
+    log.info(`Finished loading. Total scrolls: ${totalScrolls}, Products: ${previousProductCount}`);
 }
 
-// Extract product data from DOM as fallback
-async function extractProductsFromDom(page: Page, maxProducts: number): Promise<LegoProduct[]> {
-    const products: LegoProduct[] = [];
-
-    // Try various selectors for product cards
-    const selectors = [
-        '[data-test="product-item"]',
-        '[data-test="product-leaf"]',
-        'article[data-test*="product"]',
-        'li[data-test*="product"]',
-        '[class*="ProductLeaf"]',
-        '[class*="product-card"]',
-    ];
-
-    let productElements: ReturnType<Page['locator']> | null = null;
-    for (const selector of selectors) {
-        const elements = page.locator(selector);
-        const count = await elements.count().catch(() => 0);
-        if (count > 0) {
-            productElements = elements;
-            log.info(`Found ${count} products using selector: ${selector}`);
-            break;
-        }
-    }
-
-    if (!productElements) {
-        log.warning('Could not find product elements in DOM');
-        return products;
-    }
-
-    const count = await productElements.count();
-    const limit = maxProducts > 0 ? Math.min(maxProducts, count) : count;
-
-    for (let i = 0; i < limit; i++) {
-        try {
-            const element = productElements.nth(i);
-
-            // Extract product link
-            const link = await element.locator('a').first().getAttribute('href').catch(() => '') || '';
-
-            // Skip non-product links (promotional banners, category links)
-            if (!link.includes('/product/')) {
-                continue;
-            }
-
-            // Try multiple patterns for set number:
-            // 1. /product/set-name-12345 (number at end of slug after hyphen)
-            // 2. /12345/ or /12345? (direct number in path)
-            let setNumber = '';
-            const slugMatch = link.match(/-(\d{4,6})(?:\?|$)/);
-            const pathMatch = link.match(/\/(\d{5,6})(?:\?|$|\/)/);
-            if (slugMatch) {
-                setNumber = slugMatch[1];
-            } else if (pathMatch) {
-                setNumber = pathMatch[1];
-            }
-
-            // Extract name
-            const name = await element.locator('h2, h3, [data-test*="title"], [class*="title"]').first().textContent().catch(() => '') || '';
-
-            // Extract image
-            const imageUrl = await element.locator('img').first().getAttribute('src').catch(() => '') || '';
-
-            // Extract price
-            const priceText = await element.locator('[data-test*="price"], [class*="price"]').first().textContent().catch(() => '') || '';
-            const price = priceText.match(/\$[\d,.]+/)?.[0] || null;
-
-            // Extract pieces
-            const piecesText = await element.locator('[data-test*="piece"], [class*="piece"]').first().textContent().catch(() => '') || '';
-            const piecesMatch = piecesText.match(/(\d+)/);
-            const pieces = piecesMatch ? parseInt(piecesMatch[1], 10) : null;
-
-            const productUrl = link.startsWith('http') ? link : `https://www.lego.com${link}`;
-
-            if (name || setNumber) {
-                products.push({
-                    setNumber,
-                    name: name.trim(),
-                    theme: '',
-                    pieces,
-                    minifigures: null,
-                    rating: null,
-                    reviewCount: null,
-                    price,
-                    originalPrice: null,
-                    availability: 'Available',
-                    tags: [],
-                    imageUrl,
-                    productUrl,
-                    scrapedAt: new Date().toISOString(),
-                });
-            }
-        } catch (error) {
-            log.warning(`Failed to extract product at index ${i}: ${error}`);
-        }
-    }
-
-    return products;
-}
-
-// Main catalog handler
-router.addHandler('CATALOG', async ({ page, request, log }) => {
+// CATALOG handler - collects all product URLs and enqueues them
+router.addHandler('CATALOG', async ({ page, request, crawler, log }) => {
     const { maxProducts = 0 } = request.userData;
 
-    log.info(`Processing catalog page: ${request.url}`);
+    log.info(`Processing catalog: ${request.url}`);
 
-    // Set up API interception before navigating
-    await setupApiInterception(page);
-
-    // Wait for the page to load
+    // Wait for products to load
     try {
-        // Wait for product-related elements or network requests
-        await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
-
-        // Additional wait for dynamic content
-        await page.waitForTimeout(5000);
-    } catch (error) {
-        log.warning(`Page load warning: ${error}`);
+        await page.waitForSelector('[data-test="product-item"]', { timeout: 30000 });
+    } catch {
+        log.error('No products found on catalog page');
+        const screenshot = await page.screenshot({ fullPage: false });
+        await Actor.setValue('debug-catalog-screenshot', screenshot, { contentType: 'image/png' });
+        return;
     }
 
     // Scroll to load all products
-    log.info('Scrolling to load all products...');
-    const apiProductCount = await scrollToLoadAllProducts(page, maxProducts);
+    await scrollToLoadAllProducts(page, maxProducts);
 
-    let products: LegoProduct[] = [];
+    // Extract all product URLs
+    const productItems = page.locator('[data-test="product-item"]');
+    const count = await productItems.count();
+    const limit = maxProducts > 0 ? Math.min(maxProducts, count) : count;
 
-    // First, try to use API-captured data
-    if (capturedProducts.size > 0) {
-        log.info(`Processing ${capturedProducts.size} products captured from API`);
-        const baseUrl = new URL(request.url).origin;
+    log.info(`Found ${count} products, will process ${limit}`);
 
-        for (const apiProduct of capturedProducts.values()) {
-            const product = parseApiProduct(apiProduct, baseUrl);
-            if (product) {
-                products.push(product);
-            }
+    const productUrls: string[] = [];
+    for (let i = 0; i < limit; i++) {
+        const item = productItems.nth(i);
+        const link = await item.locator('a').first().getAttribute('href').catch(() => '');
 
-            if (maxProducts > 0 && products.length >= maxProducts) {
-                break;
+        if (link && link.includes('/product/')) {
+            const fullUrl = link.startsWith('http') ? link : `https://www.lego.com${link}`;
+            productUrls.push(fullUrl);
+        }
+    }
+
+    log.info(`Enqueuing ${productUrls.length} product pages for detailed scraping`);
+
+    // Enqueue all product pages
+    await crawler.addRequests(
+        productUrls.map(url => ({
+            url,
+            label: 'PRODUCT',
+        }))
+    );
+});
+
+// PRODUCT handler - extracts full details from product page
+router.addHandler('PRODUCT', async ({ page, request, log }) => {
+    log.info(`Processing product: ${request.url}`);
+
+    // Wait for product page to load
+    try {
+        await page.waitForSelector('[data-test="product-overview-name"], h1[class*="ProductName"]', { timeout: 20000 });
+    } catch {
+        log.warning(`Could not load product page: ${request.url}`);
+        return;
+    }
+
+    // Give page time to fully render
+    await page.waitForTimeout(2000);
+
+    // Extract set number from URL
+    const urlMatch = request.url.match(/-(\d{4,6})(?:\?|$)/);
+    const setNumber = urlMatch ? urlMatch[1] : '';
+
+    // Extract product name
+    const name = await page.locator('[data-test="product-overview-name"], h1[class*="ProductName"]').first().textContent().catch(() => '') || '';
+
+    // Extract theme from breadcrumbs or page
+    let theme = '';
+    const breadcrumbs = page.locator('[data-test="breadcrumb-item"], nav[aria-label="Breadcrumb"] a, [class*="Breadcrumb"] a');
+    const breadcrumbCount = await breadcrumbs.count();
+    if (breadcrumbCount > 1) {
+        // Theme is usually the second-to-last breadcrumb
+        theme = await breadcrumbs.nth(breadcrumbCount - 2).textContent().catch(() => '') || '';
+    }
+
+    // Extract price information
+    let retailPrice: string | null = null;
+    let salePrice: string | null = null;
+    let isOnSale = false;
+    let discountPercentage: number | null = null;
+
+    // Try to find sale price first (the current/discounted price)
+    const salePriceElement = page.locator('[data-test="product-price-sale"], [class*="SalePrice"], [class*="sale-price"]').first();
+    const salePriceText = await salePriceElement.textContent().catch(() => '') || '';
+    const salePriceMatch = salePriceText.match(/\$[\d,.]+/);
+
+    // Try to find original/retail price (usually struck through when on sale)
+    const originalPriceElement = page.locator('[data-test="product-price-original"], [class*="OriginalPrice"], [class*="original-price"], s:has-text("$"), del:has-text("$")').first();
+    const originalPriceText = await originalPriceElement.textContent().catch(() => '') || '';
+    const originalPriceMatch = originalPriceText.match(/\$[\d,.]+/);
+
+    // Try to find the main price display
+    const mainPriceText = await page.locator('[data-test="product-price"], [class*="ProductPrice"]').first().textContent().catch(() => '') || '';
+    const allPrices = mainPriceText.match(/\$[\d,.]+/g) || [];
+
+    // Try to find discount percentage
+    const discountText = await page.locator('[data-test*="discount"], [class*="Discount"], [class*="savings"]').first().textContent().catch(() => '') || '';
+    const discountMatch = discountText.match(/(\d+)%?/) || mainPriceText.match(/-(\d+)%/);
+
+    if (originalPriceMatch && salePriceMatch) {
+        // We have both original and sale price
+        retailPrice = originalPriceMatch[0];
+        salePrice = salePriceMatch[0];
+        isOnSale = true;
+    } else if (allPrices.length >= 2 && allPrices[0] && allPrices[1]) {
+        // Multiple prices in main price area - first is usually sale, second is original
+        // Or check which is higher
+        const price1 = parseFloat(allPrices[0].replace(/[$,]/g, ''));
+        const price2 = parseFloat(allPrices[1].replace(/[$,]/g, ''));
+        if (price1 < price2) {
+            salePrice = allPrices[0] ?? null;
+            retailPrice = allPrices[1] ?? null;
+            isOnSale = true;
+        } else if (price2 < price1) {
+            salePrice = allPrices[1] ?? null;
+            retailPrice = allPrices[0] ?? null;
+            isOnSale = true;
+        } else {
+            retailPrice = allPrices[0] ?? null;
+        }
+    } else if (salePriceMatch) {
+        salePrice = salePriceMatch[0];
+        retailPrice = originalPriceMatch ? originalPriceMatch[0] : null;
+        isOnSale = !!originalPriceMatch;
+    } else if (allPrices.length === 1 && allPrices[0]) {
+        retailPrice = allPrices[0];
+    }
+
+    // Calculate discount percentage if we have both prices
+    if (isOnSale && retailPrice && salePrice) {
+        const retail = parseFloat(retailPrice.replace(/[$,]/g, ''));
+        const sale = parseFloat(salePrice.replace(/[$,]/g, ''));
+        if (retail > 0 && sale < retail) {
+            discountPercentage = Math.round(((retail - sale) / retail) * 100);
+        }
+    } else if (discountMatch) {
+        discountPercentage = parseInt(discountMatch[1], 10);
+        isOnSale = discountPercentage > 0;
+    }
+
+    // If on sale, add Sale tag
+    if (isOnSale) {
+        // Will add to tags later
+    }
+
+    // Extract pieces count
+    const piecesText = await page.locator('[data-test="product-piece-count"], [class*="Pieces"], span:has-text("Pieces")').first().textContent().catch(() => '') || '';
+    const piecesMatch = piecesText.match(/(\d+)/);
+    const pieces = piecesMatch ? parseInt(piecesMatch[1], 10) : null;
+
+    // Extract minifigures count
+    const minifigsText = await page.locator('[data-test="product-minifig-count"], [class*="Minifig"], span:has-text("Minifigure")').first().textContent().catch(() => '') || '';
+    const minifigsMatch = minifigsText.match(/(\d+)/);
+    const minifigures = minifigsMatch ? parseInt(minifigsMatch[1], 10) : null;
+
+    // Extract age range
+    const ageText = await page.locator('[data-test="product-age"], [class*="Age"], span:has-text("Ages")').first().textContent().catch(() => '') || '';
+    const ageRange = ageText.trim() || null;
+
+    // Extract rating
+    const ratingElement = page.locator('[data-test="product-overview-rating"], [class*="Rating"]').first();
+    const ratingLabel = await ratingElement.getAttribute('aria-label').catch(() => '') || '';
+    const ratingText = await ratingElement.textContent().catch(() => '') || '';
+    const ratingMatch = ratingLabel.match(/([\d.]+)\s*(?:out of|\/)\s*5/) || ratingText.match(/([\d.]+)/);
+    const rating = ratingMatch ? parseFloat(ratingMatch[1]) : null;
+
+    // Extract review count
+    const reviewText = await page.locator('[data-test="product-review-count"], [class*="ReviewCount"], a:has-text("review")').first().textContent().catch(() => '') || '';
+    const reviewMatch = reviewText.match(/(\d+)/);
+    const reviewCount = reviewMatch ? parseInt(reviewMatch[1], 10) : null;
+
+    // Extract availability/stock status
+    let availability = 'Available';
+    const pageContent = await page.content();
+    const pageContentLower = pageContent.toLowerCase();
+
+    // Check for various stock statuses
+    const addToBagButton = page.locator('button[data-test="add-to-bag"], button:has-text("Add to Bag"), button:has-text("Add to Cart")').first();
+    const isAddToBagVisible = await addToBagButton.isVisible().catch(() => false);
+    const isAddToBagDisabled = await addToBagButton.isDisabled().catch(() => true);
+
+    if (!isAddToBagVisible || isAddToBagDisabled) {
+        if (pageContentLower.includes('sold out') || pageContentLower.includes('out of stock')) {
+            availability = 'Out of Stock';
+        } else if (pageContentLower.includes('coming soon')) {
+            availability = 'Coming Soon';
+        } else if (pageContentLower.includes('temporarily out of stock')) {
+            availability = 'Temporarily Out of Stock';
+        } else if (pageContentLower.includes('backorder')) {
+            availability = 'Backorder';
+        }
+    }
+
+    // Check for availability messaging
+    const availabilityText = await page.locator('[data-test="product-availability"], [class*="Availability"], [class*="StockStatus"]').first().textContent().catch(() => '') || '';
+    if (availabilityText) {
+        const availLower = availabilityText.toLowerCase();
+        if (availLower.includes('sold out') || availLower.includes('out of stock')) {
+            availability = 'Out of Stock';
+        } else if (availLower.includes('coming soon')) {
+            availability = 'Coming Soon';
+        } else if (availLower.includes('back order') || availLower.includes('backorder')) {
+            availability = 'Backorder';
+        } else if (availLower.includes('available')) {
+            availability = 'Available';
+        }
+    }
+
+    // Extract tags (Retiring Soon, Exclusive, New, Hard to Find, etc.)
+    const tags: string[] = [];
+
+    // Valid tag patterns we're looking for
+    const validTagPatterns = [
+        /retiring soon/i,
+        /exclusive/i,
+        /new/i,
+        /hard to find/i,
+        /sale/i,
+        /limited edition/i,
+        /insider/i,
+        /vip/i,
+        /coming soon/i,
+        /back in stock/i,
+        /bestseller/i,
+        /best seller/i,
+    ];
+
+    // Check for badges/flags only in the main product section (not carousels)
+    const mainProductSection = page.locator('[data-test="product-overview"], [class*="ProductOverview"], main').first();
+    const badgeSelectors = [
+        '[data-test*="badge"]',
+        '[data-test*="flag"]',
+    ];
+
+    for (const selector of badgeSelectors) {
+        const badges = mainProductSection.locator(selector);
+        const badgeCount = await badges.count();
+        for (let i = 0; i < Math.min(badgeCount, 10); i++) { // Limit to avoid noise
+            const badgeText = await badges.nth(i).textContent().catch(() => '') || '';
+            const trimmed = badgeText.trim();
+            // Only add if it matches a valid tag pattern and is reasonably short
+            if (trimmed && trimmed.length < 30 && validTagPatterns.some(p => p.test(trimmed))) {
+                if (!tags.includes(trimmed)) {
+                    tags.push(trimmed);
+                }
             }
         }
     }
 
-    // Fallback to DOM extraction if API capture didn't work
-    if (products.length === 0) {
-        log.info('No API data captured, falling back to DOM extraction');
-        products = await extractProductsFromDom(page, maxProducts);
+    // Check page content for specific tags (more reliable)
+    if (pageContentLower.includes('retiring soon') && !tags.some(t => t.toLowerCase().includes('retiring'))) {
+        tags.push('Retiring Soon');
+    }
+    if ((pageContentLower.includes('lego exclusive') || pageContentLower.includes('lego® exclusive'))
+        && !tags.some(t => t.toLowerCase().includes('exclusive'))) {
+        tags.push('Exclusive');
+    }
+    if (pageContentLower.includes('hard to find') && !tags.some(t => t.toLowerCase().includes('hard to find'))) {
+        tags.push('Hard to Find');
+    }
+    if ((pageContentLower.includes('insider exclusive') || pageContentLower.includes('vip exclusive'))
+        && !tags.some(t => t.toLowerCase().includes('insider') || t.toLowerCase().includes('vip'))) {
+        tags.push('Insider Exclusive');
+    }
+    // Check if it's a new product (launched recently)
+    if (pageContentLower.includes('>new<') || pageContentLower.includes('"new"')) {
+        if (!tags.includes('New')) {
+            tags.push('New');
+        }
     }
 
-    log.info(`Successfully extracted ${products.length} products`);
-
-    if (products.length === 0) {
-        // Save debug information
-        const screenshot = await page.screenshot({ fullPage: false });
-        await Actor.setValue('debug-screenshot', screenshot, { contentType: 'image/png' });
-
-        const html = await page.content();
-        await Actor.setValue('debug-html', html, { contentType: 'text/html' });
-
-        log.warning('No products found. Debug screenshot and HTML saved to key-value store.');
-    } else {
-        // Push products to dataset
-        await Dataset.pushData(products);
+    // Add Sale tag if on sale
+    if (isOnSale && !tags.some(t => t.toLowerCase() === 'sale')) {
+        tags.push('Sale');
     }
+
+    // Extract main product image
+    const imageElement = page.locator('[data-test="product-image"] img, [class*="ProductImage"] img, picture img').first();
+    let imageUrl = await imageElement.getAttribute('src').catch(() => '') || '';
+    if (!imageUrl) {
+        imageUrl = await imageElement.getAttribute('data-src').catch(() => '') || '';
+    }
+
+    const product: LegoProduct = {
+        setNumber,
+        name: name.trim(),
+        theme: theme.trim(),
+        pieces,
+        minifigures,
+        ageRange,
+        rating,
+        reviewCount,
+        retailPrice,
+        salePrice,
+        isOnSale,
+        discountPercentage,
+        availability,
+        tags: [...new Set(tags)], // Remove duplicates
+        imageUrl,
+        productUrl: request.url,
+        scrapedAt: new Date().toISOString(),
+    };
+
+    log.info(`Extracted: ${setNumber} - ${name} | ${availability} | ${tags.join(', ') || 'no tags'}`);
+
+    await Dataset.pushData(product);
 });
 
-// Default handler for any other requests
+// Default handler
 router.addDefaultHandler(async ({ request, log }) => {
-    log.info(`Handling default route for: ${request.url}`);
+    log.info(`Unhandled route: ${request.url}`);
 });
