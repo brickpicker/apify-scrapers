@@ -29,9 +29,16 @@ Actor.on('migrating', async () => {
 
 const crawler = new PlaywrightCrawler({
     proxyConfiguration,
-    maxRequestRetries: 3,
-    requestHandlerTimeoutSecs: 180,
-    navigationTimeoutSecs: 60,
+
+    // Performance settings
+    maxConcurrency: 10,              // Run up to 10 browsers in parallel
+    minConcurrency: 3,               // Always keep at least 3 running
+    maxRequestsPerMinute: 120,       // Rate limit to avoid blocks
+
+    // Timeout settings
+    maxRequestRetries: 2,            // Fewer retries = faster failures
+    requestHandlerTimeoutSecs: 60,   // Reduced from 180
+    navigationTimeoutSecs: 30,       // Reduced from 60
 
     // Use a more realistic browser setup to avoid detection
     launchContext: {
@@ -40,6 +47,8 @@ const crawler = new PlaywrightCrawler({
             args: [
                 '--disable-blink-features=AutomationControlled',
                 '--disable-dev-shm-usage',
+                '--no-sandbox',
+                '--disable-gpu',
             ],
         },
     },
