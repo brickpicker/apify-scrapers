@@ -3,7 +3,7 @@
   "name": "lego-scraper",
   "title": "LEGO Product Scraper",
   "description": "Scrapes all LEGO products from lego.com catalog including images, prices, reviews, availability, and more.",
-  "version": "1.0.0",
+  "version": "1.0",
   "buildTag": "latest",
   "meta": {
     "templateId": "ts-crawlee-playwright-chrome"
