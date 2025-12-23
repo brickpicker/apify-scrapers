@@ -8,8 +8,8 @@
   "meta": {
     "templateId": "ts-crawlee-playwright-chrome"
   },
-  "input": "./input_schema.json",
-  "dockerfile": "./Dockerfile",
+  "input": "input_schema.json",
+  "dockerfile": "Dockerfile",
   "storages": {
     "dataset": {
       "actorSpecification": 1,
